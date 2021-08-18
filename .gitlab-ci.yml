@@ -1,0 +1,146 @@
+image: _image_
+
+cache:
+    key: ${CI_PROJECT_NAME}_${CI_COMMIT_REF_SLUG}
+    paths:
+        - vendor/
+
+stages:
+    - build
+    - test
+    - analysis
+    - cleanup
+build:
+    stage: build
+    tags:
+        - app
+    script:
+        - eval $(ssh-agent -s)
+        - echo "$SSH_PRIVATE_KEY" | tr -d '\r' | ssh-add - > /dev/null
+        - composer install --ignore-platform-reqs --optimize-autoloader --no-scripts
+    only:
+        - merge_request
+        - master
+        - develop
+    except:
+        variables:
+            - $CI_MERGE_REQUEST_SOURCE_BRANCH_NAME == "develop"
+
+test:phpcs:
+    stage: test
+    tags:
+        - app
+    script:
+        - vendor/bin/phpcs
+    only:
+        - merge_request
+        - master
+    cache:
+        key: ${CI_PROJECT_NAME}_${CI_COMMIT_REF_SLUG}
+        paths:
+            - vendor/
+        policy: pull
+    except:
+        variables:
+            - $CI_MERGE_REQUEST_SOURCE_BRANCH_NAME == "develop"
+
+test:phpunit:
+    stage: test
+    tags:
+        - app
+    script:
+        - php -dzend_extension=xdebug.so -dxdebug.coverage_enable=1 vendor/bin/phpunit -d memory_limit=-1 --configuration phpunit.xml.dist --stop-on-failure
+    artifacts:
+        name: ${CI_PROJECT_NAME}_phpunit_${CI_PIPELINE_ID}
+        paths:
+            - reports/phpunit
+        expire_in: 1 week
+    cache:
+        key: ${CI_PROJECT_NAME}_${CI_COMMIT_REF_SLUG}
+        paths:
+            - vendor/
+        policy: pull
+    only:
+        - merge_request
+        - develop
+        - master
+    except:
+        variables:
+            - $CI_MERGE_REQUEST_SOURCE_BRANCH_NAME == "develop"
+test:security:
+    stage: test
+    tags:
+        - app
+    script:
+        - security-checker security:check
+    cache:
+        key: ${CI_PROJECT_NAME}_${CI_COMMIT_REF_SLUG}
+        paths:
+            - vendor/
+        policy: pull
+    only:
+        - master
+test:phpstan:
+    stage: test
+    tags:
+        - app
+    script:
+        - vendor/bin/phpstan analyse --memory-limit=-1 --no-progress
+    cache:
+        key: ${CI_PROJECT_NAME}_${CI_COMMIT_REF_SLUG}
+        paths:
+            - vendor/
+        policy: pull
+    only:
+        - merge_request
+        - master
+    except:
+        variables:
+            - $CI_MERGE_REQUEST_SOURCE_BRANCH_NAME == "develop"
+analysis:code_review:
+    stage: analysis
+    image: sonarsource/sonar-scanner-cli:latest
+    variables:
+        SONAR_HOST_URL: '$SONAR_URL'
+        SONAR_TOKEN: '$SONAR_LOGIN'
+        SONAR_USER_HOME: "${CI_PROJECT_DIR}/.sonar"
+    tags:
+        - app
+    script:
+        - sonar-scanner -Dsonar.qualitygate.wait=true
+    allow_failure: true
+    only:
+        - merge_request
+        - develop
+        - master
+    cache: { }
+    except:
+        variables:
+            - $CI_MERGE_REQUEST_SOURCE_BRANCH_NAME == "develop"
+
+analysis:phpmetrics:
+    stage: analysis
+    tags:
+        - app
+    script:
+        - ~/.composer/vendor/bin/phpmetrics --report-html=reports/phpmetrics .
+    only:
+        - master
+    artifacts:
+        name: ${CI_PROJECT_NAME}_phpmetrics_${CI_PIPELINE_ID}
+        paths:
+            - reports/phpmetrics
+        expire_in: 1 week
+    cache: { }
+
+cleanup:cleanup_job:
+    tags:
+        - app
+    stage: cleanup
+    script:
+        - find /cache/morele/${CI_PROJECT_NAME}/ -type d -mtime +7 | xargs rm -rf
+        - ls -ls /cache/morele/${CI_PROJECT_NAME}
+    allow_failure: true
+    only:
+        - master
+    cache: { }
